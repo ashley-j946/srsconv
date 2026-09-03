@@ -1,0 +1,18 @@
+[project]
+name = "srsconv"
+version = "0.1.0"
+description = "Convert spaced-repetition cards between a TSV export format and JSONL"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "ashley-j946" }]
+
+[project.scripts]
+srsconv = "srsconv.cli:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["srsconv*"]
