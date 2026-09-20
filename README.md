@@ -44,14 +44,27 @@ converted 2 card(s): jsonl -> ankitsv
 ```
 
 Format is guessed from the file extension (`.tsv`/`.txt` -> ankitsv,
-`.jsonl` -> jsonl). Use `--from`/`--to` to override.
+`.jsonl` -> jsonl, `.apkg` -> apkg). Use `--from`/`--to` to override.
+
+`apkg` is read-only: it can be used as `--from`, not `--to`. Rebuilding a
+collection Anki will accept back (decks, note types, media) is a lot more
+than this tool needs to do, so there's no writer for it.
+
+```
+$ python -m srsconv.cli MyDeck.apkg cards.jsonl
+converted 84 card(s): apkg -> jsonl
+```
 
 ## Known limitations
 
-- `due` dates are plain ISO calendar dates. Anki stores due dates internally
-  as integers relative to when the collection was created, so this format
-  does not round-trip with a real `.apkg` file — reading those would mean
-  parsing Anki's SQLite collection, which isn't implemented yet.
+- `due` dates in ankitsv/jsonl are plain ISO calendar dates. When reading a
+  real `.apkg`, review cards convert cleanly (Anki stores their due date as
+  a day count relative to the collection's creation date), but cards still
+  in a learning step only have a due *timestamp*, which gets truncated to a
+  date; the time of day and any short-term learning schedule are lost.
+- Reading `.apkg` only looks at the first two fields of each note, so note
+  types with more than two fields (e.g. cloze deletions) will lose
+  everything past the second field.
 - Multi-line card content is stored in ankitsv with newlines swapped for the
   literal text `<br>`, the same convention Anki's plain-text export uses.
   If a card's own text already contains that literal substring, it will read

@@ -1,19 +1,25 @@
-"""Card model plus readers/writers for the two formats srsconv converts between.
+"""Card model plus readers/writers for the formats srsconv converts between.
 
 ankitsv: a tab-separated format modeled on Anki's plain-text note export,
 extended with SM-2 scheduling columns. Due dates here are plain ISO calendar
-dates, not Anki's internal collection-relative day integers, so this does not
-round-trip with a real .apkg file (see README for that limitation).
+dates rather than Anki's internal collection-relative day integers.
 
 jsonl: one JSON object per line, same fields, meant for scripts that would
 rather not deal with tab-escaping.
+
+apkg: a real Anki package (zip file containing a SQLite collection). Read
+only — see parse_apkg for why there's no writer.
 """
 
 from __future__ import annotations
 
 import dataclasses
 import datetime
+import io
 import json
+import sqlite3
+import tempfile
+import zipfile
 from typing import Optional
 
 ANKITSV_COLUMNS = ["front", "back", "tags", "interval", "ease", "due", "reps", "lapses"]
@@ -21,6 +27,10 @@ ANKITSV_COLUMNS = ["front", "back", "tags", "interval", "ease", "due", "reps", "
 # Anki's plain-text export can't contain a literal newline inside a field, so
 # multi-line card content is stored with newlines swapped for this marker.
 _NEWLINE_MARKER = "<br>"
+
+# Anki stores a note's fields as one string joined with this byte (0x1f, the
+# ASCII "unit separator"), regardless of how many fields the note type has.
+_APKG_FIELD_SEPARATOR = "\x1f"
 
 DEFAULT_EASE_FACTOR = 250  # SM-2 default of 2.50, stored as basis points
 MIN_EASE_FACTOR = 130  # SM-2 floor of 1.30
@@ -160,3 +170,85 @@ def write_jsonl(cards: list[Card]) -> str:
         }
         lines.append(json.dumps(obj, ensure_ascii=False))
     return "\n".join(lines) + ("\n" if lines else "")
+
+
+def parse_apkg(data: bytes) -> list[Card]:
+    """Read cards out of a real Anki package (.apkg).
+
+    An .apkg is a zip file containing a SQLite collection database plus any
+    media. This only reads that database; there is no writer, since
+    reconstructing a collection that Anki will accept back (decks, note
+    types, media references) is a lot more than this tool needs to do.
+
+    Only the first two fields of each note are used as front/back, so note
+    types with more than two fields (e.g. cloze deletions) will lose
+    everything past the second field.
+    """
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        names = archive.namelist()
+        db_name = "collection.anki21" if "collection.anki21" in names else "collection.anki2"
+        if db_name not in names:
+            raise ValueError("not an Anki package: no collection.anki2(1) database found")
+        db_bytes = archive.read(db_name)
+
+    # sqlite3 can only open a database from a path on disk, so the extracted
+    # bytes have to be written to a temp file first.
+    with tempfile.NamedTemporaryFile(suffix=".anki2") as tmp:
+        tmp.write(db_bytes)
+        tmp.flush()
+        connection = sqlite3.connect(tmp.name)
+        try:
+            (creation_ts,) = connection.execute("SELECT crt FROM col").fetchone()
+            creation_date = datetime.date.fromtimestamp(creation_ts)
+            rows = connection.execute(
+                """
+                SELECT notes.flds, notes.tags, cards.type, cards.ivl,
+                       cards.factor, cards.due, cards.reps, cards.lapses
+                FROM cards JOIN notes ON cards.nid = notes.id
+                """
+            ).fetchall()
+        finally:
+            connection.close()
+
+    return [_apkg_row_to_card(row, creation_date) for row in rows]
+
+
+def _apkg_row_to_card(row: tuple, creation_date: datetime.date) -> Card:
+    flds, tags_field, card_type, ivl, factor, due, reps, lapses = row
+    fields = flds.split(_APKG_FIELD_SEPARATOR)
+    front = fields[0] if fields else ""
+    back = fields[1] if len(fields) > 1 else ""
+    tags = tags_field.split() if tags_field.strip() else []
+
+    # ivl is negative while a card is still stuck in a learning step, where
+    # it holds a number of seconds rather than days; treat that as no
+    # established interval yet rather than a nonsensical negative one.
+    interval_days = ivl if ivl > 0 else 0
+
+    # factor is ease*1000 (e.g. 2500 for 250%); brand-new cards have factor 0.
+    ease_factor = factor // 10 if factor else DEFAULT_EASE_FACTOR
+
+    return Card(
+        front=front,
+        back=back,
+        tags=tags,
+        interval_days=interval_days,
+        ease_factor=ease_factor,
+        due=_apkg_due_to_date(card_type, due, creation_date),
+        reps=reps,
+        lapses=lapses,
+    )
+
+
+def _apkg_due_to_date(
+    card_type: int, due: int, creation_date: datetime.date
+) -> Optional[datetime.date]:
+    if card_type == 0:
+        # New: due is the card's position in the new-card queue, not a date.
+        return None
+    if card_type in (1, 3):
+        # Learning / relearning: due is a Unix timestamp.
+        return datetime.date.fromtimestamp(due)
+    # Review (type 2): due is a day count relative to the collection's
+    # creation date.
+    return creation_date + datetime.timedelta(days=due)

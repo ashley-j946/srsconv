@@ -1,7 +1,20 @@
 import datetime
+import io
+import sqlite3
+import tempfile
 import unittest
+import zipfile
+from pathlib import Path
 
-from srsconv.formats import Card, parse_ankitsv, parse_jsonl, write_ankitsv, write_jsonl
+from srsconv.formats import (
+    Card,
+    DEFAULT_EASE_FACTOR,
+    parse_ankitsv,
+    parse_apkg,
+    parse_jsonl,
+    write_ankitsv,
+    write_jsonl,
+)
 
 # Each case is a fully-formed Card. We check that both formats can round-trip
 # it (parse(write(card)) == card), which is where the awkward encoding
@@ -99,6 +112,104 @@ class AnkitsvParsingTests(unittest.TestCase):
     def test_literal_tab_in_field_is_rejected_on_write(self):
         with self.assertRaises(ValueError):
             write_ankitsv([Card(front="bad\tfield", back="x")])
+
+
+def _build_apkg_bytes(creation_date, notes):
+    """Build an in-memory .apkg: a zip containing a minimal collection.anki2.
+
+    notes is a list of (front, back, tags, card_row) tuples, where card_row
+    is (type, ivl, factor, due, reps, lapses) matching Anki's cards table.
+    """
+    with tempfile.NamedTemporaryFile(suffix=".anki2") as tmp:
+        connection = sqlite3.connect(tmp.name)
+        try:
+            connection.execute("CREATE TABLE col (crt INTEGER)")
+            connection.execute("CREATE TABLE notes (id INTEGER, tags TEXT, flds TEXT)")
+            connection.execute(
+                "CREATE TABLE cards (nid INTEGER, type INTEGER, ivl INTEGER, "
+                "factor INTEGER, due INTEGER, reps INTEGER, lapses INTEGER)"
+            )
+            creation_ts = int(
+                datetime.datetime(
+                    creation_date.year, creation_date.month, creation_date.day
+                ).timestamp()
+            )
+            connection.execute("INSERT INTO col (crt) VALUES (?)", (creation_ts,))
+            for note_id, (front, back, tags, card_row) in enumerate(notes, start=1):
+                flds = "\x1f".join([front, back])
+                connection.execute(
+                    "INSERT INTO notes (id, tags, flds) VALUES (?, ?, ?)",
+                    (note_id, tags, flds),
+                )
+                card_type, ivl, factor, due, reps, lapses = card_row
+                connection.execute(
+                    "INSERT INTO cards (nid, type, ivl, factor, due, reps, lapses) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (note_id, card_type, ivl, factor, due, reps, lapses),
+                )
+            connection.commit()
+        finally:
+            connection.close()
+        db_bytes = Path(tmp.name).read_bytes()
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("collection.anki2", db_bytes)
+    return buffer.getvalue()
+
+
+class ApkgParsingTests(unittest.TestCase):
+    def test_new_card_has_no_due_date_or_interval(self):
+        data = _build_apkg_bytes(
+            datetime.date(2026, 1, 1),
+            [("front", "back", "", (0, 0, 0, 3, 0, 0))],
+        )
+        [card] = parse_apkg(data)
+        self.assertEqual(card.front, "front")
+        self.assertEqual(card.back, "back")
+        self.assertIsNone(card.due)
+        self.assertEqual(card.interval_days, 0)
+        self.assertEqual(card.ease_factor, DEFAULT_EASE_FACTOR)
+
+    def test_review_card_due_is_relative_to_creation_date(self):
+        data = _build_apkg_bytes(
+            datetime.date(2026, 1, 1),
+            [("q", "a", "leech tricky", (2, 10, 2500, 5, 3, 1))],
+        )
+        [card] = parse_apkg(data)
+        self.assertEqual(card.tags, ["leech", "tricky"])
+        self.assertEqual(card.interval_days, 10)
+        self.assertEqual(card.ease_factor, 250)
+        self.assertEqual(card.due, datetime.date(2026, 1, 6))
+        self.assertEqual(card.reps, 3)
+        self.assertEqual(card.lapses, 1)
+
+    def test_learning_card_due_is_a_truncated_timestamp(self):
+        due_dt = datetime.datetime(2026, 3, 1, 9, 0, 0)
+        data = _build_apkg_bytes(
+            datetime.date(2026, 1, 1),
+            [("q", "a", "", (1, -600, 0, int(due_dt.timestamp()), 1, 0))],
+        )
+        [card] = parse_apkg(data)
+        self.assertEqual(card.due, due_dt.date())
+        # negative ivl (a learning-step countdown in seconds) isn't an
+        # established interval yet
+        self.assertEqual(card.interval_days, 0)
+
+    def test_note_with_extra_fields_keeps_only_first_two(self):
+        data = _build_apkg_bytes(
+            datetime.date(2026, 1, 1),
+            [("front only", "back only", "", (0, 0, 0, 0, 0, 0))],
+        )
+        [card] = parse_apkg(data)
+        self.assertEqual((card.front, card.back), ("front only", "back only"))
+
+    def test_missing_collection_database_is_rejected(self):
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("media", "{}")
+        with self.assertRaises(ValueError):
+            parse_apkg(buffer.getvalue())
 
 
 class JsonlParsingTests(unittest.TestCase):

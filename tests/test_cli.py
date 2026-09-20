@@ -1,8 +1,10 @@
+import datetime
 import tempfile
 import unittest
 from pathlib import Path
 
 from srsconv.cli import build_parser, detect_format, main
+from tests.test_formats import _build_apkg_bytes
 
 
 class DetectFormatTests(unittest.TestCase):
@@ -14,6 +16,9 @@ class DetectFormatTests(unittest.TestCase):
 
     def test_jsonl_extension_is_jsonl(self):
         self.assertEqual(detect_format(Path("cards.jsonl")), "jsonl")
+
+    def test_apkg_extension_is_apkg(self):
+        self.assertEqual(detect_format(Path("cards.apkg")), "apkg")
 
     def test_extension_matching_is_case_insensitive(self):
         self.assertEqual(detect_format(Path("cards.TSV")), "ankitsv")
@@ -78,6 +83,30 @@ class MainTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         self.assertIn('"front": "a"', dst.read_text(encoding="utf-8"))
+
+    def test_apkg_to_jsonl(self):
+        src = self.tmpdir / "deck.apkg"
+        dst = self.tmpdir / "cards.jsonl"
+        data = _build_apkg_bytes(
+            datetime.date(2026, 1, 1),
+            [("capital of France", "Paris", "geography", (2, 12, 2500, 4, 4, 0))],
+        )
+        src.write_bytes(data)
+
+        result = main([str(src), str(dst)])
+
+        self.assertEqual(result, 0)
+        self.assertIn('"front": "capital of France"', dst.read_text(encoding="utf-8"))
+
+    def test_apkg_as_output_extension_is_rejected(self):
+        # apkg has no writer, so guessing it from the output extension
+        # should fail with a clear error rather than a KeyError.
+        src = self.tmpdir / "cards.tsv"
+        dst = self.tmpdir / "cards.apkg"
+        src.write_text("front\tback\na\tb\n", encoding="utf-8")
+
+        with self.assertRaises(ValueError):
+            main([str(src), str(dst)])
 
 
 class BuildParserTests(unittest.TestCase):
