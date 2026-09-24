@@ -44,15 +44,20 @@ converted 2 card(s): jsonl -> ankitsv
 ```
 
 Format is guessed from the file extension (`.tsv`/`.txt` -> ankitsv,
-`.jsonl` -> jsonl, `.apkg` -> apkg). Use `--from`/`--to` to override.
+`.jsonl` -> jsonl, `.apkg` -> apkg, `.xml` -> mnemosyne). Use `--from`/`--to`
+to override.
 
-`apkg` is read-only: it can be used as `--from`, not `--to`. Rebuilding a
-collection Anki will accept back (decks, note types, media) is a lot more
-than this tool needs to do, so there's no writer for it.
+`apkg` and `mnemosyne` are read-only: they can be used as `--from`, not
+`--to`. Rebuilding a collection Anki or Mnemosyne will accept back (decks,
+note types, media, in Mnemosyne's case its own grade-based scheduler) is a
+lot more than this tool needs to do, so there's no writer for either.
 
 ```
 $ python -m srsconv.cli MyDeck.apkg cards.jsonl
 converted 84 card(s): apkg -> jsonl
+
+$ python -m srsconv.cli export.xml cards.jsonl
+converted 84 card(s): mnemosyne -> jsonl
 ```
 
 ## Known limitations
@@ -65,6 +70,11 @@ converted 84 card(s): apkg -> jsonl
 - Reading `.apkg` only looks at the first two fields of each note, so note
   types with more than two fields (e.g. cloze deletions) will lose
   everything past the second field.
+- Mnemosyne doesn't store an interval directly; it derives one from a card's
+  grade at scheduling time using its own lookup table. Reading its XML
+  export approximates `interval_days` as the gap between the item's last and
+  next review timestamps instead, which is usually close but isn't the
+  exact figure Mnemosyne would compute.
 - Multi-line card content is stored in ankitsv with newlines swapped for the
   literal text `<br>`, the same convention Anki's plain-text export uses.
   If a card's own text already contains that literal substring, it will read

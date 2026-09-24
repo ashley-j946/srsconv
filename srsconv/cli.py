@@ -4,9 +4,21 @@ import argparse
 import sys
 from pathlib import Path
 
-from .formats import parse_ankitsv, parse_apkg, parse_jsonl, write_ankitsv, write_jsonl
+from .formats import (
+    parse_ankitsv,
+    parse_apkg,
+    parse_jsonl,
+    parse_mnemosyne,
+    write_ankitsv,
+    write_jsonl,
+)
 
-READERS = {"ankitsv": parse_ankitsv, "apkg": parse_apkg, "jsonl": parse_jsonl}
+READERS = {
+    "ankitsv": parse_ankitsv,
+    "apkg": parse_apkg,
+    "jsonl": parse_jsonl,
+    "mnemosyne": parse_mnemosyne,
+}
 WRITERS = {"ankitsv": write_ankitsv, "jsonl": write_jsonl}
 
 # Formats whose reader wants raw bytes rather than decoded text. apkg is a
@@ -18,6 +30,7 @@ EXTENSION_FORMATS = {
     ".txt": "ankitsv",
     ".jsonl": "jsonl",
     ".apkg": "apkg",
+    ".xml": "mnemosyne",
 }
 
 
@@ -33,7 +46,7 @@ def detect_format(path: Path) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="srsconv",
-        description="Convert spaced-repetition cards between ankitsv, jsonl, and apkg",
+        description="Convert spaced-repetition cards between ankitsv, jsonl, apkg, and mnemosyne",
     )
     parser.add_argument("input", type=Path, help="input file")
     parser.add_argument("output", type=Path, help="output file")

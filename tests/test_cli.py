@@ -20,6 +20,9 @@ class DetectFormatTests(unittest.TestCase):
     def test_apkg_extension_is_apkg(self):
         self.assertEqual(detect_format(Path("cards.apkg")), "apkg")
 
+    def test_xml_extension_is_mnemosyne(self):
+        self.assertEqual(detect_format(Path("cards.xml")), "mnemosyne")
+
     def test_extension_matching_is_case_insensitive(self):
         self.assertEqual(detect_format(Path("cards.TSV")), "ankitsv")
 
@@ -97,6 +100,30 @@ class MainTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         self.assertIn('"front": "capital of France"', dst.read_text(encoding="utf-8"))
+
+    def test_mnemosyne_xml_to_jsonl(self):
+        src = self.tmpdir / "cards.xml"
+        dst = self.tmpdir / "cards.jsonl"
+        src.write_text(
+            "<mnemosyne><category name=\"French\">"
+            "<item><Q>chat</Q><A>cat</A></item>"
+            "</category></mnemosyne>",
+            encoding="utf-8",
+        )
+
+        result = main([str(src), str(dst)])
+
+        self.assertEqual(result, 0)
+        self.assertIn('"front": "chat"', dst.read_text(encoding="utf-8"))
+
+    def test_mnemosyne_as_output_extension_is_rejected(self):
+        # mnemosyne has no writer, same as apkg.
+        src = self.tmpdir / "cards.tsv"
+        dst = self.tmpdir / "cards.xml"
+        src.write_text("front\tback\na\tb\n", encoding="utf-8")
+
+        with self.assertRaises(ValueError):
+            main([str(src), str(dst)])
 
     def test_apkg_as_output_extension_is_rejected(self):
         # apkg has no writer, so guessing it from the output extension

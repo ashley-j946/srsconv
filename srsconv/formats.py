@@ -9,6 +9,10 @@ rather not deal with tab-escaping.
 
 apkg: a real Anki package (zip file containing a SQLite collection). Read
 only — see parse_apkg for why there's no writer.
+
+mnemosyne: Mnemosyne's XML export format (categories of <item> elements).
+Read only, for the same reason as apkg: reconstructing a .mem collection
+Mnemosyne will accept back is out of scope.
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ import io
 import json
 import sqlite3
 import tempfile
+import xml.etree.ElementTree as ET
 import zipfile
 from typing import Optional
 
@@ -252,3 +257,65 @@ def _apkg_due_to_date(
     # Review (type 2): due is a day count relative to the collection's
     # creation date.
     return creation_date + datetime.timedelta(days=due)
+
+
+def parse_mnemosyne(text: str) -> list[Card]:
+    """Read cards out of Mnemosyne's XML export format.
+
+    The format is a <mnemosyne> root holding <category name="..."> elements,
+    each holding <item> elements with <Q>/<A> fields plus flat scheduling
+    tags (grade, easiness, acq_reps, ret_reps, lapses, last_rep, next_rep).
+    Some exporters skip the category wrapper and put <item> directly under
+    the root, so both shapes are read.
+
+    There is no writer: Mnemosyne's own interval algorithm (SM-2 with a
+    grade-based lookup table rather than a stored interval) doesn't map back
+    onto this tool's plain interval_days/ease_factor model without loss, and
+    rebuilding a .mem collection is out of scope anyway.
+    """
+    root = ET.fromstring(text)
+    cards = []
+    for category in root.findall("category"):
+        category_name = category.get("name", "")
+        for item in category.findall("item"):
+            cards.append(_mnemosyne_item_to_card(item, category_name))
+    for item in root.findall("item"):
+        cards.append(_mnemosyne_item_to_card(item, ""))
+    return cards
+
+
+def _mnemosyne_item_to_card(item: ET.Element, category_name: str) -> Card:
+    front = (item.findtext("Q") or "").strip()
+    back = (item.findtext("A") or "").strip()
+
+    tags = [category_name] if category_name and category_name != "default" else []
+    tags += [tag.text.strip() for tag in item.findall("tag") if tag.text and tag.text.strip()]
+
+    acq_reps = int(item.findtext("acq_reps") or 0)
+    ret_reps = int(item.findtext("ret_reps") or 0)
+    lapses = int(item.findtext("lapses") or 0)
+
+    easiness = item.findtext("easiness")
+    ease_factor = round(float(easiness) * 100) if easiness else DEFAULT_EASE_FACTOR
+
+    last_rep = item.findtext("last_rep")
+    next_rep = item.findtext("next_rep")
+    due = datetime.date.fromtimestamp(int(next_rep)) if next_rep else None
+
+    # Mnemosyne doesn't store an interval directly; it derives one at
+    # scheduling time from the grade. The gap between the two timestamps it
+    # does store is the closest stand-in.
+    interval_days = 0
+    if last_rep and next_rep:
+        interval_days = max(0, (int(next_rep) - int(last_rep)) // 86400)
+
+    return Card(
+        front=front,
+        back=back,
+        tags=tags,
+        interval_days=interval_days,
+        ease_factor=ease_factor,
+        due=due,
+        reps=acq_reps + ret_reps,
+        lapses=lapses,
+    )

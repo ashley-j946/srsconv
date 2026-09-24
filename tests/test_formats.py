@@ -12,6 +12,7 @@ from srsconv.formats import (
     parse_ankitsv,
     parse_apkg,
     parse_jsonl,
+    parse_mnemosyne,
     write_ankitsv,
     write_jsonl,
 )
@@ -210,6 +211,76 @@ class ApkgParsingTests(unittest.TestCase):
             archive.writestr("media", "{}")
         with self.assertRaises(ValueError):
             parse_apkg(buffer.getvalue())
+
+
+class MnemosyneParsingTests(unittest.TestCase):
+    def test_item_inside_category_uses_category_as_tag(self):
+        text = """
+        <mnemosyne>
+        <category name="French">
+        <item>
+        <Q>chat</Q>
+        <A>cat</A>
+        <grade>2</grade>
+        <easiness>2.5</easiness>
+        <acq_reps>3</acq_reps>
+        <ret_reps>1</ret_reps>
+        <lapses>0</lapses>
+        <last_rep>1735689600</last_rep>
+        <next_rep>1736294400</next_rep>
+        </item>
+        </category>
+        </mnemosyne>
+        """
+        [card] = parse_mnemosyne(text)
+        self.assertEqual(card.front, "chat")
+        self.assertEqual(card.back, "cat")
+        self.assertEqual(card.tags, ["French"])
+        self.assertEqual(card.ease_factor, 250)
+        self.assertEqual(card.reps, 4)
+        self.assertEqual(card.lapses, 0)
+        self.assertEqual(card.interval_days, 7)
+        self.assertEqual(card.due, datetime.date.fromtimestamp(1736294400))
+
+    def test_default_category_is_not_kept_as_a_tag(self):
+        text = """
+        <mnemosyne>
+        <category name="default">
+        <item><Q>q</Q><A>a</A></item>
+        </category>
+        </mnemosyne>
+        """
+        [card] = parse_mnemosyne(text)
+        self.assertEqual(card.tags, [])
+
+    def test_explicit_tag_elements_are_collected(self):
+        text = """
+        <mnemosyne>
+        <category name="default">
+        <item>
+        <Q>q</Q>
+        <A>a</A>
+        <tag>science</tag>
+        <tag>physics</tag>
+        </item>
+        </category>
+        </mnemosyne>
+        """
+        [card] = parse_mnemosyne(text)
+        self.assertEqual(card.tags, ["science", "physics"])
+
+    def test_item_with_no_scheduling_history_is_new(self):
+        text = "<mnemosyne><category name=\"default\"><item><Q>q</Q><A>a</A></item></category></mnemosyne>"
+        [card] = parse_mnemosyne(text)
+        self.assertIsNone(card.due)
+        self.assertEqual(card.interval_days, 0)
+        self.assertEqual(card.reps, 0)
+        self.assertEqual(card.ease_factor, DEFAULT_EASE_FACTOR)
+
+    def test_item_directly_under_root_without_category_wrapper(self):
+        text = "<mnemosyne><item><Q>q</Q><A>a</A></item></mnemosyne>"
+        [card] = parse_mnemosyne(text)
+        self.assertEqual((card.front, card.back), ("q", "a"))
 
 
 class JsonlParsingTests(unittest.TestCase):
