@@ -47,6 +47,21 @@ Format is guessed from the file extension (`.tsv`/`.txt` -> ankitsv,
 `.jsonl` -> jsonl, `.apkg` -> apkg, `.xml` -> mnemosyne). Use `--from`/`--to`
 to override.
 
+Pass `--dry-run` to see what would change without writing the output file. It
+diffs the freshly converted content against whatever is currently at the
+output path (treating a missing output file as empty), and prints a unified
+diff to stdout:
+
+```
+$ python -m srsconv.cli cards.tsv cards.jsonl --dry-run
+--- /dev/null
++++ cards.jsonl
+@@ -0,0 +1,2 @@
++{"front": "capital of France", "back": "Paris", "tags": ["geography"], "interval_days": 12, "ease_factor": 250, "due": "2026-09-20", "reps": 4, "lapses": 0}
++{"front": "2 + 2", "back": "4", "tags": ["math", "arithmetic"], "interval_days": 0, "ease_factor": 250, "due": null, "reps": 0, "lapses": 0}
+dry run: 2 card(s) would convert ankitsv -> jsonl, cards.jsonl not written
+```
+
 `apkg` and `mnemosyne` are read-only: they can be used as `--from`, not
 `--to`. Rebuilding a collection Anki or Mnemosyne will accept back (decks,
 note types, media, in Mnemosyne's case its own grade-based scheduler) is a

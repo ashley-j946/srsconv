@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import difflib
 import sys
 from pathlib import Path
 
@@ -52,6 +53,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("output", type=Path, help="output file")
     parser.add_argument("--from", dest="from_format", choices=sorted(READERS), default=None)
     parser.add_argument("--to", dest="to_format", choices=sorted(WRITERS), default=None)
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print a diff of what would change instead of writing the output file",
+    )
     return parser
 
 
@@ -70,7 +76,30 @@ def main(argv: list[str] | None = None) -> int:
         cards = READERS[from_format](args.input.read_bytes())
     else:
         cards = READERS[from_format](args.input.read_text(encoding="utf-8"))
-    args.output.write_text(WRITERS[to_format](cards), encoding="utf-8")
+    new_content = WRITERS[to_format](cards)
+
+    if args.dry_run:
+        old_content = (
+            args.output.read_text(encoding="utf-8") if args.output.exists() else ""
+        )
+        diff = "".join(
+            difflib.unified_diff(
+                old_content.splitlines(keepends=True),
+                new_content.splitlines(keepends=True),
+                fromfile=str(args.output) if args.output.exists() else "/dev/null",
+                tofile=str(args.output),
+            )
+        )
+        if diff:
+            sys.stdout.write(diff)
+        print(
+            f"dry run: {len(cards)} card(s) would convert {from_format} -> {to_format}, "
+            f"{args.output} not written",
+            file=sys.stderr,
+        )
+        return 0
+
+    args.output.write_text(new_content, encoding="utf-8")
 
     print(f"converted {len(cards)} card(s): {from_format} -> {to_format}", file=sys.stderr)
     return 0

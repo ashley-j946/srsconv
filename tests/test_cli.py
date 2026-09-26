@@ -1,4 +1,6 @@
+import contextlib
 import datetime
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -134,6 +136,60 @@ class MainTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             main([str(src), str(dst)])
+
+
+class DryRunTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmpdir = Path(self._tmp.name)
+
+    def test_missing_output_shows_whole_file_as_added_and_is_not_written(self):
+        src = self.tmpdir / "cards.tsv"
+        dst = self.tmpdir / "cards.jsonl"
+        src.write_text("front\tback\na\tb\n", encoding="utf-8")
+
+        captured = io.StringIO()
+        with contextlib.redirect_stdout(captured):
+            result = main([str(src), str(dst), "--dry-run"])
+
+        self.assertEqual(result, 0)
+        self.assertFalse(dst.exists())
+        diff = captured.getvalue()
+        self.assertIn("--- /dev/null", diff)
+        self.assertIn("+++ " + str(dst), diff)
+        self.assertIn('+{"front": "a", "back": "b"', diff)
+
+    def test_existing_output_unchanged_produces_empty_diff(self):
+        src = self.tmpdir / "cards.tsv"
+        dst = self.tmpdir / "cards.jsonl"
+        src.write_text("front\tback\na\tb\n", encoding="utf-8")
+        main([str(src), str(dst)])
+        before = dst.read_text(encoding="utf-8")
+
+        captured = io.StringIO()
+        with contextlib.redirect_stdout(captured):
+            result = main([str(src), str(dst), "--dry-run"])
+
+        self.assertEqual(result, 0)
+        self.assertEqual(captured.getvalue(), "")
+        self.assertEqual(dst.read_text(encoding="utf-8"), before)
+
+    def test_existing_output_that_would_change_is_diffed_but_not_overwritten(self):
+        src = self.tmpdir / "cards.tsv"
+        dst = self.tmpdir / "cards.jsonl"
+        dst.write_text('{"front": "old", "back": "stale"}\n', encoding="utf-8")
+        src.write_text("front\tback\na\tb\n", encoding="utf-8")
+
+        captured = io.StringIO()
+        with contextlib.redirect_stdout(captured):
+            result = main([str(src), str(dst), "--dry-run"])
+
+        self.assertEqual(result, 0)
+        diff = captured.getvalue()
+        self.assertIn('-{"front": "old", "back": "stale"}', diff)
+        self.assertIn('+{"front": "a", "back": "b"', diff)
+        self.assertEqual(dst.read_text(encoding="utf-8"), '{"front": "old", "back": "stale"}\n')
 
 
 class BuildParserTests(unittest.TestCase):
